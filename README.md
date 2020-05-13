@@ -1,2 +1,2 @@
 # Tcrit-extraction
-Repository for example Tcrit extraction from T-F0 curves
+This repository contains R code and example files for extracting Tcrit values (photosynthetic thermal tolerance limits) from T-F0 curves using thermocouple and imaging chlorophyll fluorescence files. This is intended for demonstration purposes only and may not work with different input files, but it should provide useful code that can be modifying for extracting values from T-F0 curves in various applications.
