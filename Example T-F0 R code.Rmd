@@ -1,0 +1,272 @@
+---
+title: "Example T-F0 R code"
+author: "Pieter A. Arnold"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+
+Example two-thermocouple hot or cold Tcrit, T50, Tmax extracting code
+This code is designed to extract Tcrit, T50, Tmax values from Imaging fluorometer data, and datalogger data with two thermocouples used as representative measures of leaf temperatures on samples on a Peltier plate, and a reference ID file. The example uses 24 leaf samples from three species using a dry substrate, 30 degrees C per hour ramp rate and a heat tolerance assay ramping from 20 to 65 degrees C. Refer to the manuscript for biological and methological details.  
+
+```{r load libraries}
+
+library(chron)
+library(segmented)
+library(ggplot2)
+library(scales)
+
+```
+
+
+``` {r vlookup function}
+
+vlookup <- function(ref, table, column, range = FALSE, larger = FALSE)
+{
+  if(!is.numeric(column) & !column %in% colnames(table)) {
+    stop(paste("can't find column",column,"in table"))
+  }
+  if(range) {
+    if(!is.numeric(table[,1])) {
+      stop(paste("The first column of table must be numeric when using range lookup"))
+    }
+    table <- table[order(table[,1]),] 
+    index <- findInterval(ref,table[,1])
+    if(larger) {
+      index <- ifelse(ref %in% table[,1],index,index+1)
+    }
+    output <- table[index,column]
+    output[!index <= dim(table)[1]] <- NA
+    
+  } else {
+    output <- table[match(ref,table[,1]),column]
+    output[!ref %in% table[,1]] <- NA 
+  }
+  dim(output) <- dim(ref)
+  output
+}
+
+```
+
+
+```{r folders files and meta-data}
+
+# Set folder directory where files are
+folder    <- "/Users/pieterarnold/Desktop/Example T-F0 R code/"
+i_files   <- list.files(folder, pattern = "*ID.csv", 
+                        full.names = TRUE, recursive = TRUE)
+f_files   <- list.files(folder, pattern = "*fluorescence.csv", 
+                        full.names = TRUE, recursive = TRUE)
+t_files   <- list.files(folder, pattern = "*thermocouple.csv", 
+                        full.names = TRUE, recursive = TRUE)
+
+# Check the number of fluorescence, thermocouple, and ID files are the same
+length(f_files); length(t_files); length(i_files)
+
+# Set meta-data information: ADJUST AS NEEDED
+date     <- 20190808 # the date of the assay
+n_run    <- 1 # the assay / run identification number
+nsamples <- 24 # number of leaf samples / areas of interest (AOIs)
+rate     <- 30 # ramp rate
+
+```
+
+
+```{r Reading normalising and subsetting data}
+
+# Read in the imaging fluorometer data file (with timestamp and F0 values only)   
+fluor  <- read.csv(f_files)
+head(fluor)
+str(fluor)
+
+# Read in the thermocouple data file 
+# (with timestamp and thermocouple temperature measurements)
+therm  <- read.csv(t_files)
+head(therm)
+str(therm)
+
+# Set the data output file matrix (n calculated parameters wide x n samples long)
+output <- data.frame(matrix(NA, nsamples, 7), stringsAsFactors = FALSE)
+  
+# Have to make time values characters in order to make them times. 
+# Time may be read as factor automatically.
+fluor$PAMtime <- as.character(fluor$PAMtime)
+therm$Tctime  <- as.character(therm$Tctime)
+# Note below will not work unless times in csv are already formatted to hh:mm:ss
+fluor$PAMtime <- chron(times = fluor$PAMtime)
+therm$Tctime  <- chron(times = therm$Tctime)
+#fluor <- fluor[,colSums(is.na(fluor))<nrow(fluor)]
+#therm <- therm[,colSums(is.na(therm))<nrow(therm)]
+
+# Use the function 'vlookup' to match the thermocouples temperatures and 
+# the fluorescence values by matching the times
+for (j in 1:nrow(fluor)){
+  fluor$Temp1[j]     <- vlookup(fluor$PAMtime[j], therm, 2, TRUE)
+  fluor$Temp2[j]     <- vlookup(fluor$PAMtime[j], therm, 3, TRUE)
+  fluor$Tempmean[j]  <- vlookup(fluor$PAMtime[j], therm, 4, TRUE)
+}
+  
+# Subset the data to set sensible limit within which the Tcrit value should be 
+# (works for hot and cold tolerance assays)
+xlow  <- ifelse(read.csv(i_files)$Temp[1]=="Hot", 30, -20)
+xhigh <- ifelse(read.csv(i_files)$Temp[1]=="Hot", 65, -2)
+  
+# Determine how many degrees C before the 50% fluorescence to fit the regression within: 
+# this can be optimised by adjusting based on the ramp rate that is being used 
+x_postbuffer <- 1 # parameter to change how many degrees C after 
+                  # 50% fluorescence to fit the regression within
+if(xlow=="30") { 
+  x_prebuffer <- 12 } else if(rate >= 60) { 
+    x_prebuffer <- 12 } else if(rate >= 30 & rate < 60) { 
+      x_prebuffer <- 5 } else if(rate >= 15 & rate < 30) { 
+        x_prebuffer <- 3 } else  { 
+          x_prebuffer <- 2 }
+
+# Subset the fluorescence dataset to be within the xlow and xhigh values 
+# dependent on the direction of T-F0 assay
+if(xlow=="30") {
+  fluor <- subset(fluor, fluor$Tempmean > xlow + 1 & fluor$Tempmean < 59) } else { 
+    fluor <- subset(fluor, fluor$Tempmean < xhigh & fluor$Tempmean > -20) }
+  
+# Plot the datalogger temperature against time
+# png(filename = paste0(date[i], "_run", n_run[i], "_thermocouples.png"), 
+# width = 700, height = 700, units = "px")
+
+par(mfrow = c(1,1), mar = c(4,4,1,1))
+if(xlow=="30") {
+  plot(Temp1 ~ PAMtime, data = fluor, type = "l", col = "blue", xlab = "Time", 
+       ylab = "Temperature", ylim = c(30, 60))
+} else {
+  plot(Temp1 ~ PAMtime, data = fluor, type = "l", col = "blue", xlab = "Time", 
+       ylab = "Temperature", ylim = c(-20, 0))
+}
+points(Temp2 ~ PAMtime, data = fluor, type = "l", col = "green") 
+points(Tempmean ~ PAMtime, data = fluor, type = "l", col = "red")
+legend("right", legend = c("Thermocouple 1", "Thermocouple 2", "Thermocouple mean"), 
+       col = c("blue", "green", "red"), lty = 1, bty = "n")
+#dev.off()
+  
+# Safeguard for if there is an electrical glitch for the fluorescence signal
+# Prior to rescaling, remove that row of data
+minsignal <- which.min(fluor$F1)
+fluor     <- fluor[-c(minsignal),]
+
+# Normalise values for each sample so that the first value is taken as the lowest value 
+# (i.e., later values cannot be below the starting value, so the first value is scaled 
+# to zero, which standardises 50% and 100% fluorescence values).
+
+fluor1 <- NA
+fluor2 <- data.frame(matrix(NA, 200, nsamples), stringsAsFactors = FALSE)
+for (column in 1:(nsamples)) {
+  fluor1[column] <- fluor[column + 1]
+  #l <- lengths(fluor1[column])
+  xd <- as.vector(fluor1[column][[1]])
+  xdr <- as.data.frame(rescale(xd, to = c(0,1), from = range(xd, na.rm = TRUE)))
+  xdr[nrow(xdr):200,] <- NA
+  fluor2[,column] <- as.vector(xdr)
+}
+
+# Recompile the dataframe that has had F0 values normalised F__ columns names are now 
+# named as X__ and the dataframe used below is called fluorN
+fluor[nrow(fluor):200,] <- NA
+fluorN <- (cbind(fluor, fluor2))
+  
+
+```
+
+``` {r Extract Tcrit (CTmin orCTmax) T50 Tmax}
+
+# for loop for each rescaled sample to calculate the Tcrit, T50, Tmax. 
+for (m in ((nsamples + 5):ncol(fluorN))) { 
+  # The "nsamples + 5" sets which column is the first of the normalised F0 values 
+  # png(filename = paste0(date[i], "_run", n_run[i], "_Tcrits", m-nsamples[i]-5, ".png"), 
+  # width = 700, height = 700, units = "px")
+  tryCatch({
+    par(mfrow = c(1,1), mar = c(4,4,1,1))
+    plot(fluorN[,m] ~ Tempmean, data = fluorN, type = "l", ylab = names(fluorN[m]),
+         xlim = c(xlow, xhigh), ylim = c(0,1))
+    maxval    <- which.max(fluorN[,m])
+    tempatmax <- fluorN$Tempmean[maxval]
+    
+    # If/else to make the extraction process work for both cold or hot tolerance assay data  
+    if(xlow=="30") {
+      val50 <- which(abs(subset(fluorN, fluorN$Tempmean < tempatmax)[,m]-0.5)==
+                       min(abs(subset(fluorN, fluorN$Tempmean < tempatmax)[,m]-0.5)))
+      tempat50  <- fluorN$Tempmean[val50][1]
+      thresholdval <- which(fluorN[,m] >= fluorN[val50[1],m])
+      tempatthreshold <- fluorN$Tempmean[thresholdval[1]] + x_postbuffer
+    } else {
+      val50 <- which(abs(subset(fluorN, fluorN$Tempmean > tempatmax)[,m]-0.5)==
+                       min(abs(subset(fluorN, fluorN$Tempmean > tempatmax)[,m]-0.5)))
+      tempat50  <- fluorN$Tempmean[val50][1]
+      thresholdval <- which(fluorN[,m] > fluorN[val50[1],m])
+      tempatthreshold <- fluorN$Tempmean[thresholdval[1]] - x_postbuffer
+    }      
+      
+    # Display the subset range for searching for the Tcrits 
+    if(xlow=="30") {
+      segments(tempat50 - x_prebuffer, 0, tempat50 - x_prebuffer, 1, lwd = 2, 
+               lty = 3, col = "blue") } else {
+      segments(tempat50 + x_prebuffer, 0, tempat50 + x_prebuffer, 1, lwd = 2, 
+               lty = 3, col = "blue")
+    }
+    segments(tempatthreshold, 0, tempatthreshold, 1, lwd = 2, lty = 3, col = "blue")
+    
+    # Subset the data within which to apply the regression to find the Tcrit value  
+    if(xlow=="30") {
+      fluor_sub <- subset(fluorN, fluorN$Tempmean > xlow & 
+                            fluorN$Tempmean < tempatthreshold[1] & 
+                            fluorN$Tempmean > (tempat50[1] - x_prebuffer)) } else {
+                            fluor_sub <- subset(fluorN, fluorN$Tempmean > xlow & 
+                                                  fluorN$Tempmean > tempatthreshold[1]
+                            & fluorN$Tempmean < (tempat50[1] + x_prebuffer))
+                          }
+    # Run the breakpoint regression and add the points for Tcrit, T50, Tmax to the plot
+    response   <- fluor_sub[,m]
+    model3     <- lm(response ~ Tempmean, data = fluor_sub)
+    seg_model3 <- segmented(model3, seg.Z = ~ Tempmean, npsi = 1, data = fluor_sub)
+    fitted_val3 <- fitted(seg_model3)
+    breakmodel3 <- data.frame(Temperature = fluor_sub$Tempmean, fluor_sub = fitted_val3)
+    tcritmean     <- round(seg_model3$psi[[2]], 2)
+    tcriterrmean  <- round(seg_model3$psi[[3]], 2)
+    tcrittextmean <- paste("Tcrit-break =", tcritmean, "°C")
+    lines(fluorN[,m] ~ Tempmean, data = fluorN, lwd = 4)
+    lines(fluor_sub ~ Temperature, data = breakmodel3, type = "l", col = "red", lwd = 4)
+    points(fluor_sub[which.min(abs(fluor_sub$Tempmean - tcritmean)),m] ~ tcritmean, 
+           pch = 24, bg = "orange", cex = 2)
+    points(fluorN[maxval,m] ~ tempatmax[1], pch = 21, bg = "red", cex = 2)
+    points(fluorN[val50[1],m] ~ tempat50[1], pch = 21, bg = "green", cex = 2)
+    tempatmaxtext <- paste("Tmax =", round(tempatmax, 2), "°C")
+    tempat50text  <- paste("T50 = ", round(tempat50, 2), "°C")
+    legend("right", legend = c(tempatmaxtext, tempat50text, tcrittextmean), 
+           pt.bg = c("red", "green", "orange"), pch = c(21, 21, 24), bty = "n")
+    
+    # Fill out the output dataframe to store the Tcrit values 
+    k <- m-nsamples-4
+    output[k,1] <- date
+    output[k,2] <- n_run
+    output[k,3] <- names(fluorN)[m]
+    output[k,4] <- tcritmean
+    output[k,5] <- tcriterrmean
+    output[k,6] <- tempat50[1]
+    output[k,7] <- tempatmax[1]
+      
+    }, error = function(e) {cat("ERROR :", conditionMessage(e), "\n")})
+    #dev.off()
+  }
+  
+colnames(output) <- c("Date", "Run", "AOI", "Tcrit-break", 
+                      "Tcrit-error", "tempat50", "tempatmax")
+output
+  
+# Append the Tcrit output to the ID dataset
+id_tcrit_dataset <- cbind(read.csv(i_files), output)
+id_tcrit_dataset
+# Option to write the dataset as a .csv file to be called into another script
+# write.csv(id_tcrit_dataset, paste0(date, "_run", n_run, "_dataset.csv"))
+
+#### END ####
+```
+
+
